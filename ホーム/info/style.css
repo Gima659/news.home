@@ -1,0 +1,45 @@
+.border {
+text-decoration: underline;
+text-decoration-style: double;
+text-decoration-thickness: 1px;
+text-decoration-color: #040047;
+color: #040047; 
+}
+iframe {
+width: 1450px;
+height: 500px;
+margin: 0 auto;
+}
+[lang="en"] {
+  font-family: "MonteCarlo", cursive;
+  font-weight: 400;
+  font-style: normal;
+}
+body {
+font-family: "Sawarabi Mincho", serif;
+  font-weight: 400;
+  font-style: normal;
+margin: 10;
+} 
+.N {
+ font-family: "Noto Sans JP", sans-serif;
+  font-optical-sizing: auto;
+  font-weight: <weight>;
+  font-style: normal;
+}
+.c {
+display: inline-block;
+}
+a{
+text-decoration: none;
+border: double;
+color: #006666;
+}
+h1{
+text-align: center;
+background-color: #7bedc3;
+color: #4d2f00;
+}
+.center{
+text-align: center;
+}

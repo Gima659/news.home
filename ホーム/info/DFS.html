@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>割り箸ゲーム：初期状態に戻るパス探索（分割ルール対応）</title>
+
+    <style>
+
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+
+        .container { max-width: 800px; margin: auto; background-color: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+
+        h1 { color: #0056b3; text-align: center; margin-bottom: 20px; }
+
+        button {
+
+            display: block;
+
+            width: 100%;
+
+            padding: 12px 20px;
+
+            font-size: 1.1em;
+
+            background-color: #007bff;
+
+            color: white;
+
+            border: none;
+
+            border-radius: 5px;
+
+            cursor: pointer;
+
+            transition: background-color 0.3s ease;
+
+            margin-bottom: 20px;
+
+        }
+
+        button:hover { background-color: #0056b3; }
+
+        #results {
+
+            background-color: #e9ecef;
+
+            border: 1px solid #ced4da;
+
+            border-radius: 5px;
+
+            padding: 15px;
+
+            min-height: 150px;
+
+            overflow-y: auto;
+
+            max-height: 400px;
+
+        }
+
+        .result-header { font-weight: bold; margin-bottom: 10px; color: #0056b3; }
+
+        .result-item { margin-bottom: 5px; }
+
+        .error-message { color: red; font-weight: bold; }
+
+        .info-message { color: green; font-weight: bold; }
+
+        .warning-message { color: orange; }
+
+    </style>
+
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>割り箸ゲーム：初期状態に戻るパス探索（分割ルール対応）</h1>
+
+        <p>「探索開始」ボタンを押すと、P1: [1,1], P2: [1,1] の初期状態に戻る経路を探索します。</p>
+
+        <p class="warning-message">※分割ルール追加により探索が非常に長くなる可能性があります。</p>
+
+        <button id="startButton">探索開始</button>
+
+        <div id="results">
+
+            <div class="result-header">探索結果:</div>
+
+            <div id="resultContent"></div>
+
+        </div>
+
+        <p>※ パスが見つからない場合は、探索深さや計算資源の限界による可能性があります。</p>
+
+    </div>
+
+    <script>
+
+        const startButton = document.getElementById('startButton');
+
+        const resultContent = document.getElementById('resultContent');
+
+        function logToScreen(message, type = 'info') {
+
+            const p = document.createElement('p');
+
+            p.textContent = message;
+
+            if (type === 'error') {
+
+                p.classList.add('error-message');
+
+            } else if (type === 'info') {
+
+                p.classList.add('info-message');
+
+            } else if (type === 'warning') {
+
+                p.classList.add('warning-message');
+
+            }
+
+            resultContent.appendChild(p);
+
+            resultContent.scrollTop = resultContent.scrollHeight;
+
+        }
+
+        // --- ゲームの状態定義とユーティリティ関数 ---
+
+        /**
+
+         * 指の本数を正規化する (5本以上は0本、5本ちょうどは0本)。
+
+         * @param {number} fingers - 現在の指の本数
+
+         * @returns {number} 正規化された指の本数 (0-4)
+
+         */
+
+        function normalizeFinger(fingers) {
+
+            if (typeof fingers !== 'number' || isNaN(fingers)) {
+
+                logToScreen(`[normalizeFinger] WARNING: Invalid input: ${fingers}. Returning 0.`, 'info');
+
+                return 0;
+
+            }
+
+            return (fingers >= 5) ? 0 : fingers;
+
+        }
+
+        /**
+
+         * ゲームの状態を正規化し、文字列として表現する。
+
+         * @param {object} state - ゲームの状態 { player1: { left: num, right: num }, player2: { left: num, right: num }, turn: num }
+
+         * @returns {string} 状態を表すユニークな文字列 (例: "1,1|1,1|1")
+
+         */
+
+        function getStateString(state) {
+
+            if (!state) {
+
+                logToScreen(`[getStateString] ERROR: State is null or undefined. Received: ${state}`, 'error');
+
+                throw new Error("Invalid state: null or undefined");
+
+            }
+
+            if (typeof state !== 'object' || !state.player1 || !state.player2) {
+
+                logToScreen(`[getStateString] ERROR: Invalid state object structure. State: ${JSON.stringify(state)}`, 'error');
+
+                throw new Error("Invalid state structure");
+
+            }
+
+            const p1l = normalizeFinger(state.player1.left);
+
+            const p1r = normalizeFinger(state.player1.right);
+
+            const p2l = normalizeFinger(state.player2.left);
+
+            const p2r = normalizeFinger(state.player2.right);
+
+            return `${p1l},${p1r}|${p2l},${p2r}|${state.turn}`;
+
+        }
+
+        /**
+
+         * 現在の状態から可能な次の手を全て生成する。
+
+         * @param {object} currentState - 現在のゲームの状態
+
+         * @returns {Array<{ move: string, newState: object }>} 可能な次の状態と手の説明の配列
+
+         */
+
+        function getPossibleNextMoves(currentState) {
+
+            const moves = [];
+
+            if (!currentState || !currentState.player1 || !currentState.player2 || 
+
+                typeof currentState.player1.left === 'undefined' || typeof currentState.player1.right === 'undefined' ||
+
+                typeof currentState.player2.left === 'undefined' || typeof currentState.player2.right === 'undefined') {
+
+                logToScreen(`[getPossibleNextMoves] ERROR: Invalid currentState structure on entry. State: ${JSON.stringify(currentState)}`, 'error');
+
+                return [];
+
+            }
+
+            const currentPlayerId = currentState.turn;
+
+            const currentPlayer = currentState[`player${currentPlayerId}`];
+
+            const opponentPlayer = currentState[`player${currentPlayerId === 1 ? 2 : 1}`];
+
+            const newTurn = currentPlayerId === 1 ? 2 : 1;
+
+            // -----------------------------------------------------
+
+            // 1. 攻撃 (Attack) の行動を生成
+
+            // -----------------------------------------------------
+
+            const attackingHands = [];
+
+            if (currentPlayer.left > 0) attackingHands.push('left');
+
+            if (currentPlayer.right > 0) attackingHands.push('right');
+
+            const attackedHands = [];
+
+            if (opponentPlayer.left > 0) attackedHands.push('left');
+
+            if (opponentPlayer.right > 0) attackedHands.push('right');
+
+            if (attackingHands.length > 0 && attackedHands.length > 0) { // 攻撃可能な手がある場合のみ
+
+                for (const atkHand of attackingHands) {
+
+                    for (const defHand of attackedHands) {
+
+                        const newP1 = { ...currentState.player1 };
+
+                        const newP2 = { ...currentState.player2 };
+
+                        let targetPlayerHandFingers = 0;
+
+                        if (currentPlayerId === 1) { // P1の攻撃
+
+                            targetPlayerHandFingers = (defHand === 'left') ? newP2.left : newP2.right;
+
+                            if (defHand === 'left') {
+
+                                newP2.left = normalizeFinger(newP2.left + newP1[atkHand]);
+
+                            } else {
+
+                                newP2.right = normalizeFinger(newP2.right + newP1[atkHand]);
+
+                            }
+
+                        } else { // P2の攻撃
+
+                            targetPlayerHandFingers = (defHand === 'left') ? newP1.left : newP1.right;
+
+                            if (defHand === 'left') {
+
+                                newP1.left = normalizeFinger(newP1.left + newP2[atkHand]);
+
+                            } else {
+
+                                newP1.right = normalizeFinger(newP1.right + newP2[atkHand]);
+
+                            }
+
+                        }
+
+                        const newState = {
+
+                            player1: newP1,
+
+                            player2: newP2,
+
+                            turn: newTurn // ターン交代
+
+                        };
+
+                        const moveDescription = 
+
+                            `${currentPlayerId === 1 ? 'P1' : 'P2'} (${normalizeFinger(currentState[`player${currentPlayerId}`][atkHand])})の${atkHand}で` +
+
+                            `${currentPlayerId === 1 ? 'P2' : 'P1'} (${normalizeFinger(targetPlayerHandFingers)})の${defHand}を攻撃 -> ` +
+
+                            `${currentPlayerId === 1 ? 'P2' : 'P1'}の${defHand}が${normalizeFinger(targetPlayerHandFingers + normalizeFinger(currentState[`player${currentPlayerId}`][atkHand]))}本`;
+
+                        
+
+                        moves.push({ move: `攻撃: ${moveDescription}`, newState: newState });
+
+                    }
+
+                }
+
+            }
+
+            // -----------------------------------------------------
+
+            // 2. 分割 (Split) の行動を生成
+
+            // -----------------------------------------------------
+
+            const currentP_L = normalizeFinger(currentPlayer.left);
+
+            const currentP_R = normalizeFinger(currentPlayer.right);
+
+            // 分割は、両手が同時に0本でない場合のみ可能
+
+            if (currentP_L === 0 && currentP_R === 0) {
+
+                 // 自分の両手が死んでいる場合は分割できない
+
+            } else {
+
+                // 左手から右手へ指を移動
+
+                for (let transferFingers = 1; transferFingers <= currentP_L; transferFingers++) {
+
+                    const newLeft = currentP_L - transferFingers;
+
+                    const newRight = currentP_R + transferFingers;
+
+                    // 制約チェック
+
+                    // 1. 自分の手を死なせない（移動後の手が5本以上にならない）
+
+                    if (newLeft >= 5 || newRight >= 5) continue; 
+
+                    // 2. 指の本数を交換するような移動はできない（例: (2,3) -> (3,2) や (0,3) -> (3,0)）
+
+                    // ここでのチェックは、(newLeft, newRight)が元の(currentP_R, currentP_L)と全く同じ組み合わせにならないように
+
+                    // ただし、0は特別扱い (0,3) -> (3,0)はダメだが、(0,3) -> (1,2)はOK
+
+                    // 「交換」の禁止は、(A,B)から(B,A)への移動不可と解釈
+
+                    // (L,R) と (L',R') が (R,L) にならないように
+
+                    // ただし、L==Rの場合は元々交換しても同じなので無視
+
+                    if (currentP_L !== currentP_R && newLeft === currentP_R && newRight === currentP_L) {
+
+                        continue;
+
+                    }
+
+                    const newP1 = { ...currentState.player1 };
+
+                    const newP2 = { ...currentState.player2 };
+
+                    if (currentPlayerId === 1) {
+
+                        newP1.left = newLeft;
+
+                        newP1.right = newRight;
+
+                    } else {
+
+                        newP2.left = newLeft;
+
+                        newP2.right = newRight;
+
+                    }
+
+                    const newState = {
+
+                        player1: newP1,
+
+                        player2: newP2,
+
+                        turn: newTurn // ターン交代
+
+                    };
+
+                    const moveDescription = 
+
+                        `${currentPlayerId === 1 ? 'P1' : 'P2'}の手を分割: ` +
+
+                        `左 ${currentP_L}本, 右 ${currentP_R}本 から -> ` +
+
+                        `左 ${newLeft}本, 右 ${newRight}本 (${transferFingers}本を左から右へ移動)`;
+
+                    
+
+                    moves.push({ move: `分割: ${moveDescription}`, newState: newState });
+
+                }
+
+                // 右手から左手へ指を移動
+
+                for (let transferFingers = 1; transferFingers <= currentP_R; transferFingers++) {
+
+                    const newRight = currentP_R - transferFingers;
+
+                    const newLeft = currentP_L + transferFingers;
+
+                    // 制約チェック
+
+                    // 1. 自分の手を死なせない（移動後の手が5本以上にならない）
+
+                    if (newLeft >= 5 || newRight >= 5) continue;
+
+                    // 2. 指の本数を交換するような移動はできない（例: (2,3) -> (3,2) や (0,3) -> (3,0)）
+
+                    if (currentP_L !== currentP_R && newLeft === currentP_R && newRight === currentP_L) {
+
+                        continue;
+
+                    }
+
+                    const newP1 = { ...currentState.player1 };
+
+                    const newP2 = { ...currentState.player2 };
+
+                    if (currentPlayerId === 1) {
+
+                        newP1.left = newLeft;
+
+                        newP1.right = newRight;
+
+                    } else {
+
+                        newP2.left = newLeft;
+
+                        newP2.right = newRight;
+
+                    }
+
+                    const newState = {
+
+                        player1: newP1,
+
+                        player2: newP2,
+
+                        turn: newTurn // ターン交代
+
+                    };
+
+                    const moveDescription = 
+
+                        `${currentPlayerId === 1 ? 'P1' : 'P2'}の手を分割: ` +
+
+                        `左 ${currentP_L}本, 右 ${currentP_R}本 から -> ` +
+
+                        `左 ${newLeft}本, 右 ${newRight}本 (${transferFingers}本を右から左へ移動)`;
+
+                    
+
+                    moves.push({ move: `分割: ${moveDescription}`, newState: newState });
+
+                }
+
+            }
+
+            return moves;
+
+        }
+
+        /**
+
+         * ゲームの探索関数（DFS）
+
+         * @param {object} currentState - 現在のゲームの状態
+
+         * @param {object} initialGameState - 探索開始時の初期状態（目標状態）
+
+         * @param {Set<string>} visitedStates - 既に訪問した状態のセット (循環検出用)
+
+         * @param {Array<string>} currentPath - 現在までの手の履歴
+
+         * @param {number} maxDepth - 探索の最大深度
+
+         * @returns {Array<string>|null} 目標状態に戻るパス（手の配列）、見つからなければnull
+
+         */
+
+        function findPathToInitialState(currentState, initialGameState, visitedStates, currentPath, maxDepth) {
+
+            // logToScreen(`[findPathToInitialState] Depth ${currentPath.length}/${maxDepth}. State: ${currentState ? getStateString(currentState) : "NULL/UNDEFINED"}`);
+
+            
+
+            if (currentPath.length >= maxDepth) {
+
+                return null;
+
+            }
+
+            if (!currentState) {
+
+                logToScreen(`[findPathToInitialState] ERROR: currentState is null or undefined at depth ${currentPath.length}.`, 'error');
+
+                return null;
+
+            }
+
+            let currentStateString;
+
+            try {
+
+                currentStateString = getStateString(currentState);
+
+            } catch (e) {
+
+                logToScreen(`[findPathToInitialState] ERROR: Failed to get state string for currentState at depth ${currentPath.length}. Error: ${e.message}`, 'error');
+
+                return null;
+
+            }
+
+            if (currentPath.length > 0 && currentStateString === getStateString(initialGameState)) {
+
+                logToScreen(`[findPathToInitialState] Loop detected! Path length: ${currentPath.length}.`, 'info');
+
+                return currentPath;
+
+            }
+
+            if (visitedStates.has(currentStateString)) {
+
+                return null; 
+
+            }
+
+            visitedStates.add(currentStateString);
+
+            const possibleMoves = getPossibleNextMoves(currentState);
+
+            // logToScreen(`[findPathToInitialState] Depth ${currentPath.length}: Possible moves: ${possibleMoves.length}`);
+
+            for (const { move, newState } of possibleMoves) {
+
+                if (!newState || !newState.player1 || !newState.player2) {
+
+                    logToScreen(`[findPathToInitialState] WARNING: Generated newState is invalid. Skipping branch. NewState: ${JSON.stringify(newState)} at depth ${currentPath.length}.`, 'warning');
+
+                    continue;
+
+                }
+
+                // ゲーム終了状態（どちらかのプレイヤーの両手が0本）の場合はスキップ
+
+                // これは循環パスを見つけるための探索であり、ゲーム終了は「行き止まり」とみなす
+
+                const p1l_norm = normalizeFinger(newState.player1.left);
+
+                const p1r_norm = normalizeFinger(newState.player1.right);
+
+                const p2l_norm = normalizeFinger(newState.player2.left);
+
+                const p2r_norm = normalizeFinger(newState.player2.right);
+
+                if ((p1l_norm === 0 && p1r_norm === 0) || (p2l_norm === 0 && p2r_norm === 0)) {
+
+                    // logToScreen(`[findPathToInitialState] Game over state reached (or player eliminated): ${getStateString(newState)}. Skipping. Depth ${currentPath.length}.`, 'info');
+
+                    continue;
+
+                }
+
+                // findPathToInitialStateの再帰呼び出し
+
+                const pathFound = findPathToInitialState(newState, initialGameState, visitedStates, [...currentPath, move], maxDepth);
+
+                if (pathFound) {
+
+                    return pathFound;
+
+                }
+
+            }
+
+            return null;
+
+        }
+
+ 
+
+        // --- メイン実行関数 ---
+
+        startButton.addEventListener('click', function() {
+
+            resultContent.innerHTML = '<div class="result-header">探索結果:</div>'; // 結果エリアをクリア
+
+            logToScreen("--- 割り箸ゲーム：初期状態に戻るパス探索（分割ルール対応） ---", 'info');
+
+            const initialGameState = {
+
+                player1: { left: 1, right: 1 },
+
+                player2: { left: 1, right: 1 },
+
+                turn: 1
+
+            };
+
+            logToScreen(`探索開始状態: P1: [${initialGameState.player1.left},${initialGameState.player1.right}], P2: [${initialGameState.player2.left},${initialGameState.player2.right}], ターン: P${initialGameState.turn}`, 'info');
+
+            const startTime = Date.now();
+
+            // 分割ルールが入ると状態空間が広がるため、MAX_SEARCH_DEPTHをさらに大きく設定してみる
+
+            // ただし、これでも見つからない場合やブラウザが固まる可能性もある
+
+            const MAX_SEARCH_DEPTH = 1000; 
+
+            logToScreen(`探索開始（最大深度: ${MAX_SEARCH_DEPTH}手）...`, 'info');
+
+            logToScreen(`※ 探索には時間がかかる場合があります。ブラウザが応答なしになる可能性もあります。`, 'warning');
+
+            let pathToLoop = null;
+
+            try {
+
+                pathToLoop = findPathToInitialState(initialGameState, initialGameState, new Set(), [], MAX_SEARCH_DEPTH);
+
+            } catch (e) {
+
+                logToScreen(`探索中に致命的なエラーが発生しました: ${e.message}`, 'error');
+
+                logToScreen(`エラーの詳細: ${e.stack}`, 'error');
+
+            }
+
+            const endTime = Date.now();
+
+            if (pathToLoop) {
+
+                logToScreen("\n--- パスが見つかりました！ ---", 'info');
+
+                logToScreen("ゲームを初期状態に戻す手順:", 'info');
+
+                pathToLoop.forEach((step, index) => {
+
+                    const p = document.createElement('p');
+
+                    p.classList.add('result-item');
+
+                    p.textContent = `${index + 1}. ${step}`;
+
+                    resultContent.appendChild(p);
+
+                });
+
+                logToScreen(`このパスの長さは ${pathToLoop.length} ターンです。`, 'info');
+
+            } else {
+
+                logToScreen("\n--- 初期状態に戻るパスは見つかりませんでした ---", 'info');
+
+                logToScreen(`※ 探索の深さ (${MAX_SEARCH_DEPTH}手) または計算資源の限界により、見つからない場合もあります。`, 'info');
+
+            }
+
+            logToScreen(`探索にかかった時間: ${endTime - startTime} ms`, 'info');
+
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+
+            resultContent.innerHTML = '<div class="result-header">探索結果:</div>';
+
+        });
+
+    </script>
+
+</body>
+
+</html>
